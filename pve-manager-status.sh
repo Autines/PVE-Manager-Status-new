@@ -371,246 +371,78 @@ cat > "$tmpf2" << 'EOF'
             title: gettext('传感器'),
             textField: 'sensors',
             renderer: function(value) {
-                function colorizeCpuTemp(temp) {
-                    const tempNum = parseFloat(temp);
-                    if (tempNum < 60) return `<span style="color:green; font-weight:bold;">${temp}°C</span>`;
-                    if (tempNum < 80) return `<span style="color:orange; font-weight:bold;">${temp}°C</span>`;
+                function colorizeTemp(temp) {
+                    let num = parseFloat(temp);
+                    if (num < 60) return `<span style="color:green; font-weight:bold;">${temp}°C</span>`;
+                    if (num < 80) return `<span style="color:orange; font-weight:bold;">${temp}°C</span>`;
                     return `<span style="color:red; font-weight:bold;">${temp}°C</span>`;
                 }
-                function colorizeGpuTemp(temp) {
-                    const tempNum = parseFloat(temp);
-                    if (tempNum < 60) return `<span style="color:green; font-weight:bold;">${temp}°C</span>`;
-                    if (tempNum < 80) return `<span style="color:orange; font-weight:bold;">${temp}°C</span>`;
-                    return `<span style="color:red; font-weight:bold;">${temp}°C</span>`;
+                function colorizeFan(rpm) {
+                    let num = parseFloat(rpm);
+                    if (num < 1500) return `<span style="color:green; font-weight:bold;">${rpm} RPM</span>`;
+                    if (num < 3000) return `<span style="color:orange; font-weight:bold;">${rpm} RPM</span>`;
+                    return `<span style="color:red; font-weight:bold;">${rpm} RPM</span>`;
                 }
-                function colorizeAcpiTemp(temp) {
-                    const tempNum = parseFloat(temp);
-                    if (tempNum < 60) return `<span style="color:green; font-weight:bold;">${temp}°C</span>`;
-                    if (tempNum < 80) return `<span style="color:orange; font-weight:bold;">${temp}°C</span>`;
-                    return `<span style="color:red; font-weight:bold;">${temp}°C</span>`;
-                }
-                function colorizeFanRpm(rpm) {
-                    const rpmNum = parseFloat(rpm);
-                    if (rpmNum < 1500) return `<span style="color:green; font-weight:bold;">${rpm}转/分钟</span>`;
-                    if (rpmNum < 3000) return `<span style="color:orange; font-weight:bold;">${rpm}转/分钟</span>`;
-                    return `<span style="color:red; font-weight:bold;">${rpm}转/分钟</span>`;
-                }
+                
                 value = value.replace(/Â/g, '');
-                let data = [];
-                let cpus = value.matchAll(/^(?:coretemp-isa|k10temp-pci)-(\w{4})$\n.*?\n((?:Package|Core|Tctl)[\s\S]*?^\n)+/gm);
-                for (const cpu of cpus) {
-                    let cpuNumber = parseInt(cpu[1], 10);
-                    data[cpuNumber] = {
-                        packages: [],
-                        cores: []
-                    };
-
-                    let packages = cpu[2].matchAll(/^(?:Package id \d+|Tctl):\s*\+([^°C ]+).*$/gm);
-                    for (const package of packages) {
-                        data[cpuNumber]['packages'].push(package[1]);
+                let lines = value.split('\n');
+                let packageTemp = null;
+                let coreTemps = [];
+                let boardTemp = null;
+                let cpuCrit = null;
+                let fanRpm = null;
+                
+                for (let line of lines) {
+                    // 提取 Package id 0 温度
+                    let pkgMatch = line.match(/^Package id 0:\s*\+(\d+(?:\.\d+)?)°C/);
+                    if (pkgMatch) {
+                        packageTemp = parseFloat(pkgMatch[1]).toFixed(1);
                     }
-                    let cores = cpu[2].matchAll(/^Core (\d+):\s*\+([^°C ]+).*$/gm);
-                    for (const core of cores) {
-                        var corecombi = `核心 ${core[1]}: ${colorizeCpuTemp(core[2])}`
-                        data[cpuNumber]['cores'].push(corecombi);
+                    // 提取所有 Core 核心温度
+                    let coreMatch = line.match(/^Core\s+(\d+):\s*\+(\d+(?:\.\d+)?)°C/);
+                    if (coreMatch) {
+                        coreTemps.push(parseFloat(coreMatch[2]).toFixed(1));
+                    }
+                    // 提取 CPU 临界温度（crit）
+                    let critMatch = line.match(/crit\s*=\s*\+(\d+(?:\.\d+)?)°C/);
+                    if (critMatch && cpuCrit === null && !line.includes('nvme')) {
+                        cpuCrit = critMatch[1];
+                    }
+                    // 提取主板温度（temp1）
+                    let boardMatch = line.match(/^temp1:\s*\+(\d+(?:\.\d+)?)°C/);
+                    if (boardMatch) {
+                        boardTemp = parseFloat(boardMatch[1]).toFixed(1);
+                    }
+                    // 提取风扇转速（例如 fan2: 1023 RPM）
+                    let fanMatch = line.match(/^fan\d+:\s+(\d+)\s+RPM/);
+                    if (fanMatch) {
+                        fanRpm = fanMatch[1];
                     }
                 }
-
-                let output = '';
-                for (const [i, cpu] of data.entries()) {
-                    if (cpu.packages.length > 0) {
-                        for (const packageTemp of cpu.packages) {
-                            output += `CPU ${i}: ${colorizeCpuTemp(packageTemp)} | `;
-                        }
+                
+                // 构建结果字符串
+                let parts = [];
+                if (packageTemp !== null) {
+                    let cpuStr = `CPU: ${colorizeTemp(packageTemp)}`;
+                    if (coreTemps.length > 0) {
+                        cpuStr += ` ( ${coreTemps.join(' | ')} )`;
                     }
-
-                    let gpus = value.matchAll(/^amdgpu-pci-(\w*)$\n((?!edge:)[ \S]*?\n)*((?:edge)[\s\S]*?^\n)+/gm);
-                    for (const gpu of gpus) {
-                        let gpuNumber = 0;
-                        data[gpuNumber] = {
-                            edges: []
-                        };
-
-                        let edges = gpu[3].matchAll(/^edge:\s*\+([^°C ]+).*$/gm);
-                        for (const edge of edges) {
-                            data[gpuNumber]['edges'].push(edge[1]);
-                        }
-
-                        for (const [k, gpu] of data.entries()) {
-                            if (gpu.edges.length > 0) {
-                                output += '核显: ';
-                                for (const edgeTemp of gpu.edges) {
-                                    output += `${colorizeGpuTemp(edgeTemp)}, `;
-                                }
-                                output = output.slice(0, -2);
-                                output += ' | ';
-                            } else {
-                                output = output.slice(0, -2);
-                            }
-                        }
+                    if (cpuCrit !== null) {
+                        cpuStr += ` ,超限: ${cpuCrit}°C`;
                     }
-
-                    let acpitzs = value.matchAll(/^acpitz-acpi-(\d*)$\n.*?\n((?:temp)[\s\S]*?^\n)+/gm);
-                    for (const acpitz of acpitzs) {
-                        let acpitzNumber = parseInt(acpitz[1], 10);
-                        data[acpitzNumber] = {
-                            acpisensors: []
-                        };
-
-                        let acpisensors = acpitz[2].matchAll(/^temp\d+:\s*\+([^°C ]+).*$/gm);
-                        for (const acpisensor of acpisensors) {
-                            data[acpitzNumber]['acpisensors'].push(acpisensor[1]);
-                        }
-
-                        for (const [k, acpitz] of data.entries()) {
-                            if (acpitz.acpisensors.length > 0) {
-                                output += '主板: ';
-                                for (const acpiTemp of acpitz.acpisensors) {
-                                    output += `${colorizeAcpiTemp(acpiTemp)}, `;
-                                }
-                                output = output.slice(0, -2);
-                                output += ' | ';
-                            } else {
-                                output = output.slice(0, -2);
-                            }
-                        }
-                    }
-
-                    let FunStates = value.matchAll(/^(?:[a-zA-z]{2,3}\d{4}|dell_smm)-isa-(\w{4})$\n((?![ \S]+: *\d+ +RPM)[ \S]*?\n)*((?:[ \S]+: *\d+ RPM)[\s\S]*?^\n)+/gm);
-                    for (const FunState of FunStates) {
-                        let FanNumber = 0;
-                        data[FanNumber] = {
-                            rotationals: [],
-                            cpufans: [],
-                            motherboardfans: [],
-                            pumpfans: [],
-                            systemfans: []
-                        };
-
-                        let rotationals = FunState[3].match(/^([ \S]+: *[0-9]\d* +RPM)[ \S]*?$/gm);
-                        for (const rotational of rotationals) {
-                            if (rotational.toLowerCase().indexOf("pump") !== -1 || rotational.toLowerCase().indexOf("opt") !== -1){
-                                let pumpfans = rotational.matchAll(/^[ \S]+: *([1-9]\d*) +RPM[ \S]*?$/gm);
-                                for (const pumpfan of pumpfans) {
-                                    data[FanNumber]['pumpfans'].push(pumpfan[1]);
-                                }
-                            } else if (rotational.toLowerCase().indexOf("cpu") !== -1 || rotational.toLowerCase().indexOf("processor") !== -1){
-                                let cpufans = rotational.matchAll(/^[ \S]+: *([1-9]\d*) +RPM[ \S]*?$/gm);
-                                for (const cpufan of cpufans) {
-                                    data[FanNumber]['cpufans'].push(cpufan[1]);
-                                }
-                            } else if (rotational.toLowerCase().indexOf("motherboard") !== -1){
-                                let motherboardfans = rotational.matchAll(/^[ \S]+: *([1-9]\d*) +RPM[ \S]*?$/gm);
-                                for (const motherboardfan of motherboardfans) {
-                                    data[FanNumber]['motherboardfans'].push(motherboardfan[1]);
-                                }
-                            }  else {
-                                let systemfans = rotational.matchAll(/^[ \S]+: *([1-9]\d*) +RPM[ \S]*?$/gm);
-                                for (const systemfan of systemfans) {
-                                    data[FanNumber]['systemfans'].push(systemfan[1]);
-                                }
-                            }
-                        }
-
-                        for (const [j, FunState] of data.entries()) {
-                            if (FunState.cpufans.length > 0 || FunState.motherboardfans.length > 0 || FunState.pumpfans.length > 0 || FunState.systemfans.length > 0) {
-                                output += '风扇: ';
-                                if (FunState.cpufans.length > 0) {
-                                    output += 'CPU-';
-                                    for (const cpufan_value of FunState.cpufans) {
-                                        output += `${colorizeFanRpm(cpufan_value)}, `;
-                                    }
-                                }
-
-                                if (FunState.motherboardfans.length > 0) {
-                                    output += '主板-';
-                                    for (const motherboardfan_value of FunState.motherboardfans) {
-                                        output += `${colorizeFanRpm(motherboardfan_value)}, `;
-                                    }
-                                }
-
-                                if (FunState.pumpfans.length > 0) {
-                                    output += '水冷-';
-                                    for (const pumpfan_value of FunState.pumpfans) {
-                                        output += `${colorizeFanRpm(pumpfan_value)}, `;
-                                    }
-                                }
-
-                                if (FunState.systemfans.length > 0) {
-                                    if (FunState.cpufans.length > 0 || FunState.pumpfans.length > 0) {
-                                        output += '系统-';
-                                    }
-                                    for (const systemfan_value of FunState.systemfans) {
-                                        output += `${colorizeFanRpm(systemfan_value)}, `;
-                                    }
-                                }
-                                output = output.slice(0, -2);
-                                output += ' | ';
-                            } else if (FunState.cpufans.length == 0 && FunState.pumpfans.length == 0 && FunState.systemfans.length == 0) {
-                                output += ' 风扇: 停转';
-                                output += ' | ';
-                            } else {
-                                output = output.slice(0, -2);
-                            }
-                        }
-                    }
-                    output = output.slice(0, -2);
-
-                    if (cpu.cores.length > 1) {
-                        output += '\n';
-                        for (j = 1;j < cpu.cores.length;) {
-                            for (const coreTemp of cpu.cores) {
-                                output += `${coreTemp} | `;
-                                j++;
-                                if ((j-1) % 4 == 0){
-                                    output = output.slice(0, -2);
-                                    output += '\n';
-                                }
-                            }
-                        }
-                        output = output.slice(0, -2);
-                    }
-                    output += '\n';
+                    parts.push(cpuStr);
                 }
-
-                output = output.slice(0, -2);
-                return output.replace(/\n/g, '<br>');
-            }
+                if (boardTemp !== null) {
+                    parts.push(`主板: ${colorizeTemp(boardTemp)}`);
+                }
+                if (fanRpm !== null) {
+                    parts.push(`风扇: ${colorizeFan(fanRpm)}`);
+                }
+                
+                return parts.join(' | ');
+            },
         },
-        {
-            itemId: 'corefreq',
-            colspan: 2,
-            printBar: false,
-            title: gettext('核心频率'),
-            textField: 'cpufreq',
-            renderer: function(value) {
-                function colorizeCpuFreq(freq) {
-                    const freqNum = parseFloat(freq);
-                    if (freqNum < 1500) return `<span style="color:green; font-weight:bold;">${freq} MHz</span>`;
-                    if (freqNum < 3000) return `<span style="color:orange; font-weight:bold;">${freq} MHz</span>`;
-                    return `<span style="color:red; font-weight:bold;">${freq} MHz</span>`;
-                }
-                const freqMatches = value.matchAll(/^cpu MHz\s*:\s*([\d\.]+)/gm);
-                const frequencies = [];
-
-                for (const match of freqMatches) {
-                    const coreNum = frequencies.length + 1;
-                    frequencies.push(`线程 ${coreNum}: ${colorizeCpuFreq(parseInt(match[1]))}`);
-                }
-
-                if (frequencies.length === 0) {
-                    return '无法获取CPU频率信息';
-                }
-
-                const groupedFreqs = [];
-                for (let i = 0; i < frequencies.length; i += 4) {
-                    const group = frequencies.slice(i, i + 4);
-                    groupedFreqs.push(group.join(' | '));
-                }
-
-                return groupedFreqs.join('<br>');
-            }
-        },
+        
 EOF
 
 for x in {0..9}; do
@@ -831,56 +663,59 @@ for x in {0..9}; do
                                 output += \`负载: \${colorizeSsdLoad(nvme_util)}\`;
                             }
                         }
-                        output += '<br>';
+                        // output += '<br>';
 
-                        if (nvme.States.length > 0) {
-                            output += 'I/O: ';
-                            if (nvme.r_kBs.length > 0 || nvme.r_awaits.length > 0) {
-                                output += '读-';
-                                if (nvme.r_kBs.length > 0) {
-                                    for (const nvme_r_kB of nvme.r_kBs) {
-                                        var nvme_r_mB = \`\${nvme_r_kB}\` / 1024;
-                                        nvme_r_mB = nvme_r_mB.toFixed(2);
-                                        output += \`速度 \${colorizeIoSpeed(nvme_r_mB)}\`;
-                                    }
-                                }
-                                if (nvme.r_awaits.length > 0) {
-                                    output += ', ';
-                                    for (const nvme_r_await of nvme.r_awaits) {
-                                        output += \`延迟 \${colorizeIoLatency(nvme_r_await)}\`;
-                                    }
-                                }
-                            }
+						// I/O 信息已禁用（如需恢复，请删除下面的 if(false) 包裹）
+						if (false) {
+							if (nvme.States.length > 0) {
+								output += 'I/O: ';
+								if (nvme.r_kBs.length > 0 || nvme.r_awaits.length > 0) {
+									output += '读-';
+									if (nvme.r_kBs.length > 0) {
+										for (const nvme_r_kB of nvme.r_kBs) {
+											var nvme_r_mB = \`\${nvme_r_kB}\` / 1024;
+											nvme_r_mB = nvme_r_mB.toFixed(2);
+											output += \`速度 \${colorizeIoSpeed(nvme_r_mB)}\`;
+										}
+									}
+									if (nvme.r_awaits.length > 0) {
+										output += ', ';
+										for (const nvme_r_await of nvme.r_awaits) {
+											output += \`延迟 \${colorizeIoLatency(nvme_r_await)}\`;
+										}
+									}
+								}
 
-                            if (nvme.w_kBs.length > 0 || nvme.w_awaits.length > 0) {
-                                if (nvme.r_kBs.length > 0 || nvme.r_awaits.length > 0) {
-                                    output += ' / ';
-                                }
-                                output += '写-';
-                                if (nvme.w_kBs.length > 0) {
-                                    for (const nvme_w_kB of nvme.w_kBs) {
-                                        var nvme_w_mB = \`\${nvme_w_kB}\` / 1024;
-                                        nvme_w_mB = nvme_w_mB.toFixed(2);
-                                        output += \`速度 \${colorizeIoSpeed(nvme_w_mB)}\`;
-                                    }
-                                }
-                                if (nvme.w_awaits.length > 0) {
-                                    output += ', ';
-                                    for (const nvme_w_await of nvme.w_awaits) {
-                                        output += \`延迟 \${colorizeIoLatency(nvme_w_await)}\`;
-                                    }
-                                }
-                            }
-                        }
+								if (nvme.w_kBs.length > 0 || nvme.w_awaits.length > 0) {
+									if (nvme.r_kBs.length > 0 || nvme.r_awaits.length > 0) {
+										output += ' / ';
+									}
+									output += '写-';
+									if (nvme.w_kBs.length > 0) {
+										for (const nvme_w_kB of nvme.w_kBs) {
+											var nvme_w_mB = \`\${nvme_w_kB}\` / 1024;
+											nvme_w_mB = nvme_w_mB.toFixed(2);
+											output += \`速度 \${colorizeIoSpeed(nvme_w_mB)}\`;
+										}
+									}
+									if (nvme.w_awaits.length > 0) {
+										output += ', ';
+										for (const nvme_w_await of nvme.w_awaits) {
+											output += \`延迟 \${colorizeIoLatency(nvme_w_await)}\`;
+										}
+									}
+								}
+							} 
+						}
 
                         if (nvme.Cycles.length > 0) {
-                            output += '<br>';
+                            output += ' | ';
                             for (const nvmeCycle of nvme.Cycles) {
                                 output += \`通电: \${nvmeCycle.replace(/ |,/gm, '')}次\`;
                             }
 
                             if (nvme.Shutdowns.length > 0) {
-                                output += ', ';
+                                output += ' | ';
                                 for (const nvmeShutdown of nvme.Shutdowns) {
                                     output += \`不安全断电\${nvmeShutdown.replace(/ |,/gm, '')}次\`;
                                     break
@@ -888,9 +723,11 @@ for x in {0..9}; do
                             }
 
                             if (nvme.Hours.length > 0) {
-                                output += ', ';
+                                output += ' | ';
                                 for (const nvmeHour of nvme.Hours) {
-                                    output += \`累计\${nvmeHour.replace(/ |,/gm, '')}小时\`;
+                                    let hours = parseInt(nvmeHour.replace(/ |,/gm, ''));
+                                    let days = Math.floor(hours / 24);
+                                    output += '累计: ' + days + '天';
                                 }
                             }
                         }
@@ -908,96 +745,6 @@ EOF
     done
 done
 
-cat >> "$tmpf2" << 'EOF'
-        {
-            itemId: 'sata_status',
-            colspan: 2,
-            printBar: false,
-            title: gettext('SATA硬盘'),
-            textField: 'sata_status',
-            renderer: function(value) {
-                function colorizeHddTemp(temp) {
-                    const tempNum = parseFloat(temp);
-                    if (tempNum < 40) return `<span style="color:green; font-weight:bold;">${temp}°C</span>`;
-                    if (tempNum < 50) return `<span style="color:orange; font-weight:bold;">${temp}°C</span>`;
-                    return `<span style="color:red; font-weight:bold;">${temp}°C</span>`;
-                }
-                if (value.length > 0) {
-                try {
-                const jsonData = JSON.parse(value);
-                if (jsonData.standy === true) {
-                return '休眠中';
-                }
-                let output = '';
-                if (jsonData.model_name) {
-                output = `<strong>${jsonData.model_name}</strong><br>`;
-                        if (jsonData.temperature?.current !== undefined) {
-                        output += `温度: <strong>${colorizeHddTemp(jsonData.temperature.current)}</strong>`;
-                        }
-                        if (jsonData.power_on_time?.hours !== undefined) {
-                        if (output.length > 0) output += ' | ';
-                        output += `通电: ${jsonData.power_on_time.hours}小时`;
-                        if (jsonData.power_cycle_count) {
-                        output += `, 次数: ${jsonData.power_cycle_count}`;
-                        }
-                        }
-                        if (jsonData.smart_status?.passed !== undefined) {
-                        if (output.length > 0) output += ' | ';
-                        output += 'SMART: ' + (jsonData.smart_status.passed ? '正常' : '警告!');
-                        }
-                        return output;
-                        }
-                        } catch (e) {
-                        }
-                        let outputs = [];
-                        let devices = value.matchAll(/(\s*(Model|Device Model|Vendor).*:\s*[\s\S]*?\n){1,2}^User.*\[([\s\S]*?)\]\n^\s*9[\s\S]*?\-\s*([\d]+)[\s\S]*?(\n(^19[0,4][\s\S]*?$){1,2}|\s{0}$)/gm);
-                        for (const device of devices) {
-                        let devicemodel = '';
-                        if (device[1].indexOf("Family") !== -1) {
-                        devicemodel = device[1].replace(/.*Model Family:\s*([\s\S]*?)\n^Device Model:\s*([\s\S]*?)\n/m, '$1 - $2');
-                        } else if (device[1].match(/Vendor/)) {
-                        devicemodel = device[1].replace(/.*Vendor:\s*([\s\S]*?)\n^.*Model:\s*([\s\S]*?)\n/m, '$1 $2');
-                        } else {
-                        devicemodel = device[1].replace(/.*(Model|Device Model):\s*([\s\S]*?)\n/m, '$2');
-                        }
-                        let capacity = device[3] ? device[3].replace(/ |,/gm, '') : "未知容量";
-                        let powerOnHours = device[4] || "未知";
-                        let deviceOutput = '';
-                        if (value.indexOf("Min/Max") !== -1) {
-                        let devicetemps = device[6]?.matchAll(/19[0,4][\s\S]*?\-\s*(\d+)(\s\(Min\/Max\s(\d+)\/(\d+)\)$|\s{0}$)/gm);
-                        for (const devicetemp of devicetemps || []) {
-                            deviceOutput = `<strong>${devicemodel}</strong><br>容量: ${capacity} | 已通电: ${powerOnHours}小时 | 温度: <strong>${colorizeHddTemp(devicetemp[1])}</strong>`;
-                            outputs.push(deviceOutput);
-                        }
-                        } else if (value.indexOf("Temperature") !== -1 || value.match(/Airflow_Temperature/)) {
-                        let devicetemps = device[6]?.matchAll(/19[0,4][\s\S]*?\-\s*(\d+)/gm);
-                        for (const devicetemp of devicetemps || []) {
-                        deviceOutput = `<strong>${devicemodel}</strong><br>容量: ${capacity} | 已通电: ${powerOnHours}小时 | 温度: <strong>${colorizeHddTemp(devicetemp[1])}</strong>`;
-                        outputs.push(deviceOutput);
-                        }
-                        } else {
-                        if (value.match(/\/dev\/sd[a-z]/)) {
-                            deviceOutput = `<strong>${devicemodel}</strong><br>容量: ${capacity} | 已通电: ${powerOnHours}小时 | 提示: 设备存在但未报告温度信息`;
-                            outputs.push(deviceOutput);
-                        } else {
-                            deviceOutput = `<strong>${devicemodel}</strong><br>容量: ${capacity} | 已通电: ${powerOnHours}小时 | 提示: 未检测到温度传感器`;
-                            outputs.push(deviceOutput);
-                        }
-                        }
-                        }
-                        if (!outputs.length && value.length > 0) {
-                        let fallbackDevices = value.matchAll(/(\/dev\/sd[a-z]).*?Model:([\s\S]*?)\n/gm);
-                        for (const fallbackDevice of fallbackDevices || []) {
-                            outputs.push(`${fallbackDevice[2].trim()}<br>提示: 设备存在但无法获取完整信息`);
-                        }
-                        }
-                        return outputs.length ? outputs.join('<br>') : '提示: 检测到硬盘但无法识别详细信息';
-                    } else {
-                        return '提示: 未安装 SATA硬盘 或已直通 SATA控制器!';
-                }
-            }
-        },
-EOF
 
 # 计算插入行号
 ln=$(sed -n '/pveversion/,+10{/},/{=;q}}' $pvemanagerlib)
@@ -1210,7 +957,7 @@ echo && sleep 0.5
 
 echo -e "🎚️ 正在动态调整修改后的页面高度:"
 
-# 基于模型: 每行内容 17px, 每个模块段落间额外 7px 间距
+# 基于模型: 每行内容 15px, 每个模块段落间额外 5px 间距
 calculate_height_increase() {
     local total_lines=0
     local module_count=0
@@ -1233,37 +980,16 @@ calculate_height_increase() {
         total_lines=$((total_lines + sensor_core_lines))
     fi
 
-    # itemId:corefreq(核心频率): 无固定行
-    module_count=$((module_count + 1))
-    # 根据 /proc/cpuinfo 输出的线程数量计算额外行数
-    local thread_count=$(grep -c ^processor /proc/cpuinfo)
-    if [ "$thread_count" -gt 0 ]; then
-        local core_freq_lines=$(((thread_count + 4 - 1) / 4))
-        total_lines=$((total_lines + core_freq_lines))
-    fi
-
-    # itemId:nvme-status(NVMe硬盘): 固定4行每个
+    # itemId:nvme-status(NVMe硬盘): 固定2行每个
     local nvme_count=$(lsblk -d -o NAME | grep -c 'nvme[0-9]')
     if [ "$nvme_count" -gt 0 ]; then
-        local nvme_lines=$((nvme_count * 4))
+        local nvme_lines=$((nvme_count * 2))
         total_lines=$((total_lines + nvme_lines))
         module_count=$((module_count + nvme_count))
     fi
 
-    # itemId:sata_status(SATA硬盘): 无固定行
-    module_count=$((module_count + 1))
-    local sata_count=$(lsblk -d -o NAME | grep -c 'sd[a-z]')
-    if [ "$sata_count" -gt 0 ]; then
-        # 第1个SATA硬盘占2行, 后续每个占3行(含1行间距)
-        local sata_lines=$((2 + (sata_count - 1) * 3))
-        total_lines=$((total_lines + sata_lines))
-    else
-        # 不存在SATA硬盘时, 占用1行显示提示信息
-        total_lines=$((total_lines + 1))
-    fi
-
-    # 根据模型计算总高度增量: (行数 * 17px) + (模块数 * 7px)
-    local height_increase=$((total_lines * 17 + module_count * 7))
+    # 根据模型计算总高度增量: (行数 * 15px) + (模块数 * 5px)
+    local height_increase=$((total_lines * 15 + module_count * 5))
     echo $height_increase
 }
 
@@ -1271,7 +997,7 @@ calculate_height_increase() {
 height_increase=$(calculate_height_increase)
 
 # 基于基础高度(350px)计算新高度
-new_height=$((350 + height_increase))
+new_height=$((340 + height_increase))
 
 # 使用 sed 命令定位并更新 PVE.node.StatusView 的 height 属性
 sed -i -E "/Ext.define\('PVE.node.StatusView'/,/height:/{s/height: *[0-9]+,/height: $new_height,/}" "$pvemanagerlib"
@@ -1295,4 +1021,4 @@ if [ $restart_status -ne 0 ]; then
     echo && exit 1
 fi
 
-echo -e "\n✅ 修改完成, 请使用 Ctrl + F5 刷新浏览器 Proxmox VE Web 管理页面缓存\n"
+echo -e "\n✅ 修改完成, 请使用 Ctrl + F5 刷新浏览器 Proxmox VE Web 管理页面缓存。可使用 apt install --reinstall pve-manager pve-i18n 恢复默认\n"
